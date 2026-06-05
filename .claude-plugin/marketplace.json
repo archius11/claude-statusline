@@ -1,0 +1,37 @@
+{
+  "name": "claude-statusline",
+  "owner": {
+    "name": "Galeev Artur"
+  },
+  "metadata": {
+    "description": "A fuller status line for Claude Code, with optional claude-buddy integration.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "claude-statusline",
+      "source": "./",
+      "description": "A fuller Claude Code status line: workspace, git branch, model, context usage and rate limits. Optionally weaves into claude-buddy's ASCII art. After enabling, run /statusline-install to wire it into settings.json.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Galeev Artur"
+      },
+      "homepage": "https://github.com/archius11/claude-statusline#readme",
+      "repository": "https://github.com/archius11/claude-statusline",
+      "license": "MIT",
+      "keywords": [
+        "claude-code",
+        "statusline",
+        "context",
+        "rate-limits",
+        "claude-buddy"
+      ],
+      "category": "productivity",
+      "tags": [
+        "statusline",
+        "context",
+        "rate-limits"
+      ]
+    }
+  ]
+}

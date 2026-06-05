@@ -1,0 +1,19 @@
+{
+  "name": "claude-statusline",
+  "version": "0.1.0",
+  "description": "A fuller Claude Code status line: workspace, git branch, model, context usage and rate limits. Optionally weaves into claude-buddy's ASCII art. Run /statusline-install after enabling.",
+  "author": {
+    "name": "Galeev Artur"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/archius11/claude-statusline",
+  "homepage": "https://github.com/archius11/claude-statusline#readme",
+  "keywords": [
+    "claude-code",
+    "statusline",
+    "status-line",
+    "context",
+    "rate-limits",
+    "claude-buddy"
+  ]
+}
