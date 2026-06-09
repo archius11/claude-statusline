@@ -6,9 +6,7 @@
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20WSL%20%7C%20macOS%20%7C%20Windows-blue)
 ![Dependencies](https://img.shields.io/badge/deps-python3-green)
 
-```
-~/projects/claude-statusline  |  main | Opus 4.8 | max effort  |  [█░░░░░░░░░] 12% ctx 1M  |  5h 40%  |  7d 8%
-```
+![claude-statusline preview](preview.png)
 
 It runs on Linux, WSL, macOS, and Windows. On its own it prints one clean line. If you also use [claude-buddy](https://github.com/1270011/claude-buddy) (Linux and macOS), your info tucks into the empty margin next to buddy's ASCII art instead of taking its own line.
 
