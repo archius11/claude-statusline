@@ -319,26 +319,24 @@ def run_buddy():
 # Built-in safety net, used ONLY if the schema file is missing or unreadable,
 # so the status line still renders. The real defaults and types live in
 # claude-statusline.schema.json (the single source of truth); this just mirrors
-# them as a last resort. 'segments' are on/off toggles per item; 'context' holds
-# the token thresholds where the bar turns yellow / red.
+# them as a last resort. Settings are grouped by stat: one group per segment,
+# holding that segment's own 'enable' toggle plus any extra options (display
+# mode, progress bar, and the token thresholds where context turns yellow / red).
 SAFETY_NET = {
-    "segments": {
-        "workspace": True,
-        "branch": True,
-        "dirty": True,
-        "diff": True,
-        "model": True,
-        "effort": True,
-        "context": True,
-        "cost": False,
-        "five_hour": True,
-        "seven_day": True,
-        "burn_rate": True,
-    },
+    "workspace": {"enable": True},
+    "branch": {"enable": True, "dirty": True},
+    "diff": {"enable": True},
+    "model": {"enable": True, "effort": True},
+    "cost": {"enable": False},
     "context": {
-        "yellow_tokens": 200000,
-        "red_tokens": 250000,
+        "enable": True,
+        "display": "percent",
+        "progress_bar": True,
+        "yellow": 200000,
+        "red": 250000,
     },
+    "five_hour": {"enable": True, "progress_bar": False, "burn_rate": True},
+    "seven_day": {"enable": True, "progress_bar": False, "burn_rate": True},
 }
 
 
@@ -427,8 +425,15 @@ def main():
 
     defaults = schema_defaults(resolve_schema_path())
     cfg = load_config(resolve_config_path(), defaults)
-    seg = cfg.get("segments", {})
+    # Settings are grouped by stat; each segment reads its own group below.
+    ws_cfg = cfg.get("workspace", {})
+    br_cfg = cfg.get("branch", {})
+    diff_cfg = cfg.get("diff", {})
+    md_cfg = cfg.get("model", {})
+    cost_cfg = cfg.get("cost", {})
     ctx_cfg = cfg.get("context", {})
+    fh_cfg = cfg.get("five_hour", {})
+    sd_cfg = cfg.get("seven_day", {})
 
     # Normalise Windows '\' to '/' so path display and the "last two components"
     # split below behave the same on every platform.
@@ -474,14 +479,14 @@ def main():
     # Branch + dirty state (cached; see git_info). Skip the git work entirely when
     # neither the branch nor the dirty marker is shown.
     branch, dirty = "", False
-    if cwd and (seg.get("branch", True) or seg.get("dirty", True)):
+    if cwd and (br_cfg.get("enable", True) or br_cfg.get("dirty", True)):
         branch, dirty = git_info(cwd)
 
     # Each info segment is (ansi_text, visual_width). visual_width excludes the
     # zero-width ANSI escapes, so we can right-align against the buddy art by hand.
     info = []
 
-    if seg.get("workspace", True) and cwd_short:
+    if ws_cfg.get("enable", True) and cwd_short:
         # Keep only the last two path components to stay compact.
         parts = cwd_short.split("/")
         short = "/".join(parts[-2:]) if len(parts) > 2 else cwd_short
@@ -492,13 +497,13 @@ def main():
     # (not git), so it can still appear on its own when there is no branch.
     repo_bits = []
     repo_w = 0
-    if seg.get("branch", True) and branch:
+    if br_cfg.get("enable", True) and branch:
         mark, mark_w = "", 0
-        if seg.get("dirty", True) and dirty:
+        if br_cfg.get("dirty", True) and dirty:
             mark, mark_w = f"{YLW}*{RST}", 1
         repo_bits.append(f"{DIM}⎇{RST} {BOLD}{branch}{RST}{mark}")
         repo_w += 2 + len(branch) + mark_w  # '⎇ ' occupies two columns
-    if seg.get("diff", True) and (lines_added or lines_removed):
+    if diff_cfg.get("enable", True) and (lines_added or lines_removed):
         repo_bits.append(f"{GRN}+{lines_added}{RST}/{RED}-{lines_removed}{RST}")
         repo_w += 3 + len(str(lines_added)) + len(str(lines_removed))  # '+N/-M'
     if repo_bits:
@@ -508,13 +513,13 @@ def main():
     # entry is collected as (text, visual_width) so the ' | ' separators (3 columns
     # each) are counted once, in one place, rather than threaded through every if.
     meta = []
-    if seg.get("model", True) and model_short:
+    if md_cfg.get("enable", True) and model_short:
         meta.append((model_short, len(model_short)))
-    if seg.get("effort", True) and effort:
+    if md_cfg.get("effort", True) and effort:
         # 'max effort': the level in normal weight, the word 'effort' dimmed to match
         # the 'ctx' / '5h' / '7d' labels elsewhere.
         meta.append((f"{effort} {DIM}effort{RST}", len(effort) + 1 + len("effort")))
-    if seg.get("cost", False) and cost is not None:
+    if cost_cfg.get("enable", False) and cost is not None:
         # Running session spend in USD, coloured like a budget gauge.
         if cost >= 10:
             cc = RED
@@ -532,36 +537,57 @@ def main():
         width = sum(w for _t, w in meta) + 3 * (len(meta) - 1)  # ' | ' is 3 columns
         info.append((text, width))
 
-    if seg.get("context", True) and ctx_pct is not None:
+    if ctx_cfg.get("enable", True) and ctx_pct is not None:
         p = int(round(ctx_pct))
-        if ctx_size:
+        used = ctx_pct * int(ctx_size) / 100 if ctx_size else None
+        if used is not None:
             # Colour by absolute tokens used, against the configured thresholds.
-            used = ctx_pct * int(ctx_size) / 100
-            if used >= cfg_int(ctx_cfg, "red_tokens", 250000):
+            if used >= cfg_int(ctx_cfg, "red", 250000):
                 c = RED
-            elif used >= cfg_int(ctx_cfg, "yellow_tokens", 200000):
+            elif used >= cfg_int(ctx_cfg, "yellow", 200000):
                 c = YLW
             else:
                 c = GRN
         else:
             # No window size reported, so fall back to a percentage traffic light.
             c = cpct(p)
+        # Value text per display mode. 'tokens' / 'both' need the absolute token
+        # count, so they fall back to plain percent when no window size is known.
+        mode = ctx_cfg.get("display", "percent")
+        if mode == "tokens" and used:
+            value = fmtsz(used)
+        elif mode == "both" and used:
+            value = f"{p}% {fmtsz(used)}"
+        else:
+            value = f"{p}%"
         sl = fmtsz(ctx_size)
         sp = f" {sl}" if sl else ""
-        ps = str(p)
-        text = f"{c}[{bar(p)}]{RST} {ps}% {DIM}ctx{sp}{RST}"
-        vw = 1 + 10 + 1 + 1 + len(ps) + 1 + 1 + 3 + len(sp)
+        if ctx_cfg.get("progress_bar", True):
+            # The bar carries the threshold colour; the value stays plain.
+            head = f"{c}[{bar(p)}]{RST} {value}"
+            bar_w = 1 + 10 + 1 + 1  # '[' + bar(10) + ']' + ' '
+        else:
+            # No bar to colour, so the value itself carries the colour signal.
+            head = f"{c}{value}{RST}"
+            bar_w = 0
+        text = f"{head} {DIM}ctx{sp}{RST}"
+        vw = bar_w + len(value) + 1 + 3 + len(sp)  # value + ' ' + 'ctx' + sp
         info.append((text, vw))
 
     fh_pct = num(fh.get("used_percentage"))
-    if seg.get("five_hour", True) and fh_pct is not None:
+    if fh_cfg.get("enable", True) and fh_pct is not None:
         p = int(round(fh_pct))
         c = cpct(p)
         rs = fmtrst(fh.get("resets_at"), 18000)
-        br = burn(fh_pct, fh.get("resets_at"), 18000) if seg.get("burn_rate", True) else ""
+        br = burn(fh_pct, fh.get("resets_at"), 18000) if fh_cfg.get("burn_rate", True) else ""
         ps = str(p)
-        text = f"{DIM}5h{RST} {c}{ps}%{RST}"
-        vw = 4 + len(ps)  # '5h ' + digits + '%'
+        if fh_cfg.get("progress_bar", False):
+            # Optional usage bar after the label, e.g. '5h [████░░░░░░] 40%'.
+            text = f"{DIM}5h{RST} {c}[{bar(p)}]{RST} {c}{ps}%{RST}"
+            vw = 2 + 1 + (1 + 10 + 1) + 1 + len(ps) + 1  # '5h ' + '[bar] ' + digits + '%'
+        else:
+            text = f"{DIM}5h{RST} {c}{ps}%{RST}"
+            vw = 4 + len(ps)  # '5h ' + digits + '%'
         if rs:
             text += f" {rs}"
             vw += 1 + len(rs)
@@ -573,14 +599,19 @@ def main():
         info.append((text, vw))
 
     sd_pct = num(sd.get("used_percentage"))
-    if seg.get("seven_day", True) and sd_pct is not None:
+    if sd_cfg.get("enable", True) and sd_pct is not None:
         p = int(round(sd_pct))
         c = cpct(p)
         rs = fmtrst(sd.get("resets_at"), 604800)
-        br = burn(sd_pct, sd.get("resets_at"), 604800) if seg.get("burn_rate", True) else ""
+        br = burn(sd_pct, sd.get("resets_at"), 604800) if sd_cfg.get("burn_rate", True) else ""
         ps = str(p)
-        text = f"{DIM}7d{RST} {c}{ps}%{RST}"
-        vw = 4 + len(ps)  # '7d ' + digits + '%'
+        if sd_cfg.get("progress_bar", False):
+            # Optional usage bar after the label, e.g. '7d [████░░░░░░] 60%'.
+            text = f"{DIM}7d{RST} {c}[{bar(p)}]{RST} {c}{ps}%{RST}"
+            vw = 2 + 1 + (1 + 10 + 1) + 1 + len(ps) + 1  # '7d ' + '[bar] ' + digits + '%'
+        else:
+            text = f"{DIM}7d{RST} {c}{ps}%{RST}"
+            vw = 4 + len(ps)  # '7d ' + digits + '%'
         if rs:
             text += f" {rs}"
             vw += 1 + len(rs)

@@ -34,7 +34,7 @@ Tool: `PY "${CLAUDE_PLUGIN_ROOT}/statusline/statusline-config.py" <subcommand>`
 
 - `dump`: schema + current values as JSON (drives the menu)
 - `set <key> <value>`: validate and apply one change (`key` may be a full path
-  like `segments.branch`, or any alias like `branch` / `show-branch`)
+  like `branch.enable`, or any alias like `branch` / `show-branch`)
 - `get [key]`: read the current value(s)
 - `validate`: check the on-disk config against the schema
 - `reset [key]`: reset one setting (or everything) to defaults
@@ -69,7 +69,7 @@ Read the arguments and act in **one** of these modes:
 Drive a multi-level menu with the **AskUserQuestion** tool, walking the dump JSON:
 
 1. **Pick a group.** One question whose options are the `groups[].label`
-   (e.g. "Segments", "Context thresholds"). Add a "Show current config" option.
+   (e.g. "Context usage", "5-hour rate limit"). Add a "Show current config" option.
 2. **Pick a setting.** Options are that group's `options[].label`; in each
    option's description, show its `current_display` and `help`.
 3. **Pick or enter a value:**

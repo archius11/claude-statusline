@@ -78,6 +78,49 @@ def test_render_crash_proof():
             check(r.returncode == 0, f"crash-proof exit 0 for {payload[:32]!r}")
 
 
+def _count_bars(s):
+    # A rendered progress bar is a '[' immediately followed by a block glyph
+    # (█ / ░). ANSI escapes are '[' + digits + 'm', never '[' + a block, so this
+    # counts real bars without tripping over colour codes or '2.5h'-style text.
+    return sum(1 for i in range(len(s) - 1) if s[i] == "[" and s[i + 1] in "█░")
+
+
+def test_render_new_options():
+    # Per-stat config groups reach the renderer, and the new display / progress-bar
+    # options change the output as expected.
+    payload = ('{"context_window":{"used_percentage":40,"context_window_size":1000000},'
+               '"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":9999999999}}}')
+    with tempfile.TemporaryDirectory() as sb:
+        env = no_buddy(sb)
+        cfgp = env["STATUSLINE_CONFIG"]
+
+        # context.display = tokens -> show the token count instead of a percentage.
+        with open(cfgp, "w") as f:
+            json.dump({"context": {"display": "tokens"}}, f)
+        r = run([PY, RENDER], payload, env)
+        check(r.returncode == 0, "new-options render exits 0")
+        check("400K" in r.stdout, "context display=tokens shows the token count")
+        check("40%" not in r.stdout, "context tokens mode drops the percentage")
+
+        # Default: one bar (context on, 5h off).
+        with open(cfgp, "w") as f:
+            json.dump({}, f)
+        base = run([PY, RENDER], payload, env)
+        check(_count_bars(base.stdout) == 1, "one progress bar by default (context)")
+
+        # context bar off -> no bars left.
+        with open(cfgp, "w") as f:
+            json.dump({"context": {"progress_bar": False}}, f)
+        off = run([PY, RENDER], payload, env)
+        check(_count_bars(off.stdout) == 0, "context progress_bar=false removes the bar")
+
+        # 5h bar on (context still on) -> two bars.
+        with open(cfgp, "w") as f:
+            json.dump({"five_hour": {"progress_bar": True}}, f)
+        two = run([PY, RENDER], payload, env)
+        check(_count_bars(two.stdout) == 2, "five_hour progress_bar=true adds a second bar")
+
+
 def test_install_uninstall_roundtrip():
     with tempfile.TemporaryDirectory() as sb:
         settings = os.path.join(sb, "settings.json")
@@ -185,6 +228,7 @@ def main():
     print(f"platform: {sys.platform} (os.name={os.name})\n")
     test_render_single_line()
     test_render_crash_proof()
+    test_render_new_options()
     test_install_uninstall_roundtrip()
     test_interop_buddy_statusline()
     test_buddy_discovery_via_registration()

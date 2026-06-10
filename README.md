@@ -101,11 +101,13 @@ On Windows:
 Type **`/statusline`** in Claude Code to toggle segments and adjust thresholds. There's no file to edit, and changes show up on the next refresh, about a second later.
 
 ```
-/statusline                  → guided menu
-/statusline branch disable   → toggle a segment
-/statusline yellow 180k      → set a context threshold
-/statusline show             → print the current config
-/statusline reset            → restore defaults
+/statusline                    → guided menu
+/statusline branch disable     → toggle a segment
+/statusline yellow 180k        → set a context threshold
+/statusline ctx-display tokens → show context as tokens instead of %
+/statusline 5h-bar enable      → add a progress bar to the 5h limit
+/statusline show               → print the current config
+/statusline reset              → restore defaults
 ```
 
 <details>
@@ -113,26 +115,28 @@ Type **`/statusline`** in Claude Code to toggle segments and adjust thresholds. 
 
 Settings live in `~/.claude/claude-statusline.config.json`, or `%USERPROFILE%\.claude\claude-statusline.config.json` on Windows. The file starts out empty (`{}`) and stores only the keys you override. Everything else falls back to its default, and a mangled file falls back to defaults too, so the bar keeps working.
 
+Each stat is its own group that holds its `enable` toggle plus any extra options:
+
 ```json
 {
-  "segments": {
-    "workspace": true,
-    "branch": true,
-    "model": true,
-    "effort": true,
-    "context": true,
-    "five_hour": true,
-    "seven_day": true,
-    "burn_rate": true
-  },
+  "workspace": { "enable": true },
+  "branch":    { "enable": true, "dirty": true },
+  "diff":      { "enable": true },
+  "model":     { "enable": true, "effort": true },
+  "cost":      { "enable": false },
   "context": {
-    "yellow_tokens": 200000,
-    "red_tokens": 250000
-  }
+    "enable": true,
+    "display": "percent",
+    "progress_bar": true,
+    "yellow": 200000,
+    "red": 250000
+  },
+  "five_hour": { "enable": true, "progress_bar": false, "burn_rate": true },
+  "seven_day": { "enable": true, "progress_bar": false, "burn_rate": true }
 }
 ```
 
-Set any segment to `false` to hide that part of the bar. The two `context.*_tokens` values are the token counts where the bar turns yellow and then red; lower them for smaller-context models.
+Set a group's `enable` to `false` to hide that part of the bar. For **context**: `display` switches between `percent` (40%), `tokens` (the tokens used, e.g. 150K) and `both`; `progress_bar` toggles the `[████░░░░░░]` bar; and `yellow`/`red` are the token counts where it turns yellow then red (lower them for smaller-context models). The **5h** and **7d** limits each take their own `progress_bar` (off by default) and `burn_rate` flag.
 
 The full list of settings, with defaults and allowed values, lives in [`claude-statusline.schema.json`](statusline/claude-statusline.schema.json).
 </details>

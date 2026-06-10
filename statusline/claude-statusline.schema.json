@@ -1,22 +1,28 @@
 {
   "version": 1,
-  "_comment": "Single source of truth for claude-statusline settings. The renderer (statusline.sh) reads its defaults from here; the config engine (statusline-config.py) reads types/aliases/constraints from here to validate writes and drive the /statusline menu. The on-disk config file holds ONLY the values the user has overridden. To add a new setting, add a leaf node below; every consumer picks it up automatically.",
+  "_comment": "Single source of truth for claude-statusline settings. The renderer (claude-statusline-render.py) reads its defaults from here; the config engine (statusline-config.py) reads types/aliases/constraints from here to validate writes and drive the /statusline menu. Settings are grouped by stat: one group per segment, holding that segment's own 'enable' toggle plus any extra options (display mode, progress bar, thresholds). The on-disk config file holds ONLY the values the user has overridden. To add a new setting, add a leaf node below; every consumer picks it up automatically.",
   "groups": {
-    "segments": {
-      "label": "Segments",
-      "help": "Toggle which pieces of info appear in the status line.",
+    "workspace": {
+      "label": "Workspace",
+      "help": "The current working directory (last two path components).",
       "children": {
-        "workspace": {
+        "enable": {
           "type": "bool",
           "default": true,
-          "label": "Workspace",
+          "label": "Show workspace",
           "help": "Show the current working directory (last two path components).",
           "aliases": ["workspace", "ws"]
-        },
-        "branch": {
+        }
+      }
+    },
+    "branch": {
+      "label": "Git branch",
+      "help": "The current git branch and whether the tree has uncommitted changes.",
+      "children": {
+        "enable": {
           "type": "bool",
           "default": true,
-          "label": "Git branch",
+          "label": "Show branch",
           "help": "Show the current git branch when inside a repository.",
           "aliases": ["branch", "show-branch", "git"]
         },
@@ -26,18 +32,30 @@
           "label": "Dirty marker",
           "help": "Show a '*' after the branch when the working tree has uncommitted changes (staged or unstaged).",
           "aliases": ["dirty", "git-dirty", "modified"]
-        },
-        "diff": {
+        }
+      }
+    },
+    "diff": {
+      "label": "Line changes",
+      "help": "Lines added/removed by the assistant this session.",
+      "children": {
+        "enable": {
           "type": "bool",
           "default": true,
-          "label": "Line changes",
+          "label": "Show line changes",
           "help": "Show lines added/removed by the assistant this session (e.g. '+12/-3').",
           "aliases": ["diff", "lines", "line-diff", "changes"]
-        },
-        "model": {
+        }
+      }
+    },
+    "model": {
+      "label": "Model",
+      "help": "The active model and its current reasoning effort.",
+      "children": {
+        "enable": {
           "type": "bool",
           "default": true,
-          "label": "Model name",
+          "label": "Show model name",
           "help": "Show the active model (e.g. 'Opus 4.8').",
           "aliases": ["model"]
         },
@@ -47,65 +65,119 @@
           "label": "Effort level",
           "help": "Show the current reasoning effort (e.g. 'max effort'). Hidden automatically when the model doesn't support an effort level.",
           "aliases": ["effort", "reasoning", "reasoning-effort"]
-        },
-        "context": {
-          "type": "bool",
-          "default": true,
-          "label": "Context usage",
-          "help": "Show the context-window usage bar and percentage.",
-          "aliases": ["context", "ctx"]
-        },
-        "cost": {
+        }
+      }
+    },
+    "cost": {
+      "label": "Session cost",
+      "help": "The session's running cost in USD.",
+      "children": {
+        "enable": {
           "type": "bool",
           "default": false,
-          "label": "Session cost",
+          "label": "Show session cost",
           "help": "Show the session's running cost in USD (e.g. '$1.23').",
           "aliases": ["cost", "money", "spend", "usd"]
-        },
-        "five_hour": {
-          "type": "bool",
-          "default": true,
-          "label": "5-hour rate limit",
-          "help": "Show 5-hour rate-limit usage and time until reset.",
-          "aliases": ["five_hour", "5h", "five-hour"]
-        },
-        "seven_day": {
-          "type": "bool",
-          "default": true,
-          "label": "7-day rate limit",
-          "help": "Show 7-day rate-limit usage and time until reset.",
-          "aliases": ["seven_day", "7d", "seven-day"]
-        },
-        "burn_rate": {
-          "type": "bool",
-          "default": true,
-          "label": "Burn-rate flag",
-          "help": "Show a 🔴/🟢 flag after each rate-limit reset time. 🔴 means your current spend rate will hit 100% before the window resets; 🟢 means you're on pace or have headroom. Computed from used_percentage + resets_at only.",
-          "aliases": ["burn_rate", "burn", "burn-rate", "pace"]
         }
       }
     },
     "context": {
-      "label": "Context thresholds",
-      "help": "Token counts where the context bar changes colour.",
+      "label": "Context usage",
+      "help": "Context-window usage, how it's shown, and where it changes colour.",
       "children": {
-        "yellow_tokens": {
+        "enable": {
+          "type": "bool",
+          "default": true,
+          "label": "Show context usage",
+          "help": "Show the context-window usage segment.",
+          "aliases": ["context", "ctx"]
+        },
+        "display": {
+          "type": "enum",
+          "default": "percent",
+          "values": ["percent", "tokens", "both"],
+          "label": "Display mode",
+          "help": "How to show usage: 'percent' (40%), 'tokens' (the tokens used, e.g. 150K), or 'both' (40% 150K). Falls back to percent when the model doesn't report a window size.",
+          "aliases": ["display", "ctx-display", "context-display"]
+        },
+        "progress_bar": {
+          "type": "bool",
+          "default": true,
+          "label": "Progress bar",
+          "help": "Show the [████░░░░░░] usage bar before the value.",
+          "aliases": ["ctx-bar", "context-bar"]
+        },
+        "yellow": {
           "type": "int",
           "default": 200000,
           "min": 1000,
           "max": 10000000,
           "label": "Yellow threshold",
-          "help": "Tokens used at which the context bar turns yellow. Accepts forms like 200000 or 200k.",
-          "aliases": ["yellow_tokens", "yellow", "yellow-tokens"]
+          "help": "Tokens used at which the context segment turns yellow. Accepts forms like 200000 or 200k.",
+          "aliases": ["yellow", "yellow_tokens", "yellow-tokens"]
         },
-        "red_tokens": {
+        "red": {
           "type": "int",
           "default": 250000,
           "min": 1000,
           "max": 10000000,
           "label": "Red threshold",
-          "help": "Tokens used at which the context bar turns red. Must be >= the yellow threshold. Accepts forms like 250000 or 250k.",
-          "aliases": ["red_tokens", "red", "red-tokens"]
+          "help": "Tokens used at which the context segment turns red. Must be >= the yellow threshold. Accepts forms like 250000 or 250k.",
+          "aliases": ["red", "red_tokens", "red-tokens"]
+        }
+      }
+    },
+    "five_hour": {
+      "label": "5-hour rate limit",
+      "help": "5-hour rate-limit usage, its progress bar and burn-rate flag.",
+      "children": {
+        "enable": {
+          "type": "bool",
+          "default": true,
+          "label": "Show 5-hour limit",
+          "help": "Show 5-hour rate-limit usage and time until reset.",
+          "aliases": ["five_hour", "5h", "five-hour"]
+        },
+        "progress_bar": {
+          "type": "bool",
+          "default": false,
+          "label": "Progress bar",
+          "help": "Show a [████░░░░░░] usage bar before the percentage.",
+          "aliases": ["5h-bar", "five-hour-bar"]
+        },
+        "burn_rate": {
+          "type": "bool",
+          "default": true,
+          "label": "Burn-rate flag",
+          "help": "Show a 🔴/🟢 flag after the reset time. 🔴 means your current spend rate will hit 100% before the window resets; 🟢 means you're on pace or have headroom.",
+          "aliases": ["5h-burn", "five-hour-burn"]
+        }
+      }
+    },
+    "seven_day": {
+      "label": "7-day rate limit",
+      "help": "7-day rate-limit usage, its progress bar and burn-rate flag.",
+      "children": {
+        "enable": {
+          "type": "bool",
+          "default": true,
+          "label": "Show 7-day limit",
+          "help": "Show 7-day rate-limit usage and time until reset.",
+          "aliases": ["seven_day", "7d", "seven-day"]
+        },
+        "progress_bar": {
+          "type": "bool",
+          "default": false,
+          "label": "Progress bar",
+          "help": "Show a [████░░░░░░] usage bar before the percentage.",
+          "aliases": ["7d-bar", "seven-day-bar"]
+        },
+        "burn_rate": {
+          "type": "bool",
+          "default": true,
+          "label": "Burn-rate flag",
+          "help": "Show a 🔴/🟢 flag after the reset time. 🔴 means your current spend rate will hit 100% before the window resets; 🟢 means you're on pace or have headroom.",
+          "aliases": ["7d-burn", "seven-day-burn"]
         }
       }
     }
@@ -113,9 +185,9 @@
   "constraints": [
     {
       "rule": "gte",
-      "left": "context.red_tokens",
-      "right": "context.yellow_tokens",
-      "message": "red_tokens must be >= yellow_tokens (the red threshold cannot be lower than the yellow one)."
+      "left": "context.red",
+      "right": "context.yellow",
+      "message": "red must be >= yellow (the red threshold cannot be lower than the yellow one)."
     }
   ]
 }

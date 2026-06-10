@@ -73,7 +73,7 @@ def load_schema():
 
 def leaf_nodes(schema):
     # Flatten the schema into an ordered list of (path, group_key, node) tuples.
-    # 'path' is the dotted location ('segments.branch') used inside the config.
+    # 'path' is the dotted location ('branch.enable') used inside the config.
     nodes = []
     for group_key, group in schema.get("groups", {}).items():
         for child_key, node in group.get("children", {}).items():
@@ -83,7 +83,7 @@ def leaf_nodes(schema):
 
 def alias_map(schema):
     # Map every alias AND every full path to its canonical dotted path, so the
-    # user can type 'branch', 'show-branch' or 'segments.branch' interchangeably.
+    # user can type 'branch', 'show-branch' or 'branch.enable' interchangeably.
     mapping = {}
     for path, _group, node in leaf_nodes(schema):
         mapping[path] = path
