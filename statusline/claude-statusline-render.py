@@ -335,8 +335,8 @@ SAFETY_NET = {
         "yellow": 200000,
         "red": 250000,
     },
-    "five_hour": {"enable": True, "progress_bar": False, "burn_rate": True},
-    "seven_day": {"enable": True, "progress_bar": False, "burn_rate": True},
+    "five_hour": {"enable": True, "burn_rate": True},
+    "seven_day": {"enable": True, "burn_rate": True},
 }
 
 
@@ -581,13 +581,8 @@ def main():
         rs = fmtrst(fh.get("resets_at"), 18000)
         br = burn(fh_pct, fh.get("resets_at"), 18000) if fh_cfg.get("burn_rate", True) else ""
         ps = str(p)
-        if fh_cfg.get("progress_bar", False):
-            # Optional usage bar after the label, e.g. '5h [████░░░░░░] 40%'.
-            text = f"{DIM}5h{RST} {c}[{bar(p)}]{RST} {c}{ps}%{RST}"
-            vw = 2 + 1 + (1 + 10 + 1) + 1 + len(ps) + 1  # '5h ' + '[bar] ' + digits + '%'
-        else:
-            text = f"{DIM}5h{RST} {c}{ps}%{RST}"
-            vw = 4 + len(ps)  # '5h ' + digits + '%'
+        text = f"{DIM}5h{RST} {c}{ps}%{RST}"
+        vw = 4 + len(ps)  # '5h ' + digits + '%'
         if rs:
             text += f" {rs}"
             vw += 1 + len(rs)
@@ -605,13 +600,8 @@ def main():
         rs = fmtrst(sd.get("resets_at"), 604800)
         br = burn(sd_pct, sd.get("resets_at"), 604800) if sd_cfg.get("burn_rate", True) else ""
         ps = str(p)
-        if sd_cfg.get("progress_bar", False):
-            # Optional usage bar after the label, e.g. '7d [████░░░░░░] 60%'.
-            text = f"{DIM}7d{RST} {c}[{bar(p)}]{RST} {c}{ps}%{RST}"
-            vw = 2 + 1 + (1 + 10 + 1) + 1 + len(ps) + 1  # '7d ' + '[bar] ' + digits + '%'
-        else:
-            text = f"{DIM}7d{RST} {c}{ps}%{RST}"
-            vw = 4 + len(ps)  # '7d ' + digits + '%'
+        text = f"{DIM}7d{RST} {c}{ps}%{RST}"
+        vw = 4 + len(ps)  # '7d ' + digits + '%'
         if rs:
             text += f" {rs}"
             vw += 1 + len(rs)

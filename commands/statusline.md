@@ -1,5 +1,5 @@
 ---
-description: Configure the claude-statusline status line. Toggle segments, switch the context display (percent/tokens), tune thresholds, and turn progress bars on or off — via a guided menu or direct arguments.
+description: Configure the claude-statusline status line. Toggle segments, switch the context display (percent/tokens), tune thresholds, and turn the context progress bar on or off — via a guided menu or direct arguments.
 argument-hint: "[setting] [value]   ·   e.g. branch disable · yellow 180k · (empty opens a menu)"
 allowed-tools: Bash(python3:*), Bash(python:*), Bash(py:*), AskUserQuestion
 ---

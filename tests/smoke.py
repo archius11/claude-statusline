@@ -114,12 +114,6 @@ def test_render_new_options():
         off = run([PY, RENDER], payload, env)
         check(_count_bars(off.stdout) == 0, "context progress_bar=false removes the bar")
 
-        # 5h bar on (context still on) -> two bars.
-        with open(cfgp, "w") as f:
-            json.dump({"five_hour": {"progress_bar": True}}, f)
-        two = run([PY, RENDER], payload, env)
-        check(_count_bars(two.stdout) == 2, "five_hour progress_bar=true adds a second bar")
-
 
 def test_install_uninstall_roundtrip():
     with tempfile.TemporaryDirectory() as sb:

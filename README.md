@@ -27,7 +27,7 @@ The renderer is one Python file that behaves the same everywhere. Each platform 
 - **Branch and model**: your current git branch and the model you're on.
 - **Effort**: the active reasoning effort, like `max effort`. It disappears when the model has no effort level.
 - **Context**: a colour-coded bar with the used percentage and the window size (`200K` or `1M`). You can switch the percentage to a token count, or hide the bar.
-- **5h and 7d**: rate-limit usage, with how long until each window resets, and an optional usage bar.
+- **5h and 7d**: rate-limit usage, with how long until each window resets.
 - **Burn-rate flag**: a 🔴/🟢 after each reset time. 🔴 means you'll hit the limit *before* the window resets; 🟢 means you're on pace or have room to spare.
 
 The colours read like a traffic light: green means you have room, yellow means it's filling up, red means you're close to the limit.
@@ -105,7 +105,6 @@ Type **`/statusline`** in Claude Code to toggle segments and adjust thresholds. 
 /statusline branch disable     → toggle a segment
 /statusline yellow 180k        → set a context threshold
 /statusline ctx-display tokens → show context as tokens instead of %
-/statusline 5h-bar enable      → add a progress bar to the 5h limit
 /statusline show               → print the current config
 /statusline reset              → restore defaults
 ```
@@ -131,12 +130,12 @@ Each stat is its own group that holds its `enable` toggle plus any extra options
     "yellow": 200000,
     "red": 250000
   },
-  "five_hour": { "enable": true, "progress_bar": false, "burn_rate": true },
-  "seven_day": { "enable": true, "progress_bar": false, "burn_rate": true }
+  "five_hour": { "enable": true, "burn_rate": true },
+  "seven_day": { "enable": true, "burn_rate": true }
 }
 ```
 
-Set a group's `enable` to `false` to hide that part of the bar. For **context**: `display` switches between `percent` (40%), `tokens` (the tokens used, e.g. 150K) and `both`; `progress_bar` toggles the `[████░░░░░░]` bar; and `yellow`/`red` are the token counts where it turns yellow then red (lower them for smaller-context models). The **5h** and **7d** limits each take their own `progress_bar` (off by default) and `burn_rate` flag.
+Set a group's `enable` to `false` to hide that part of the bar. For **context**: `display` switches between `percent` (40%), `tokens` (the tokens used, e.g. 150K) and `both`; `progress_bar` toggles the `[████░░░░░░]` bar; and `yellow`/`red` are the token counts where it turns yellow then red (lower them for smaller-context models). The **5h** and **7d** limits each take their own `burn_rate` flag.
 
 The full list of settings, with defaults and allowed values, lives in [`claude-statusline.schema.json`](statusline/claude-statusline.schema.json).
 </details>

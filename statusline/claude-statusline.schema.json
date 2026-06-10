@@ -129,7 +129,7 @@
     },
     "five_hour": {
       "label": "5-hour rate limit",
-      "help": "5-hour rate-limit usage, its progress bar and burn-rate flag.",
+      "help": "5-hour rate-limit usage and burn-rate flag.",
       "children": {
         "enable": {
           "type": "bool",
@@ -137,13 +137,6 @@
           "label": "Show 5-hour limit",
           "help": "Show 5-hour rate-limit usage and time until reset.",
           "aliases": ["five_hour", "5h", "five-hour"]
-        },
-        "progress_bar": {
-          "type": "bool",
-          "default": false,
-          "label": "Progress bar",
-          "help": "Show a [████░░░░░░] usage bar before the percentage.",
-          "aliases": ["5h-bar", "five-hour-bar"]
         },
         "burn_rate": {
           "type": "bool",
@@ -156,7 +149,7 @@
     },
     "seven_day": {
       "label": "7-day rate limit",
-      "help": "7-day rate-limit usage, its progress bar and burn-rate flag.",
+      "help": "7-day rate-limit usage and burn-rate flag.",
       "children": {
         "enable": {
           "type": "bool",
@@ -164,13 +157,6 @@
           "label": "Show 7-day limit",
           "help": "Show 7-day rate-limit usage and time until reset.",
           "aliases": ["seven_day", "7d", "seven-day"]
-        },
-        "progress_bar": {
-          "type": "bool",
-          "default": false,
-          "label": "Progress bar",
-          "help": "Show a [████░░░░░░] usage bar before the percentage.",
-          "aliases": ["7d-bar", "seven-day-bar"]
         },
         "burn_rate": {
           "type": "bool",
