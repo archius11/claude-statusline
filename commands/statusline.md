@@ -1,5 +1,5 @@
 ---
-description: Configure the claude-statusline status line. Toggle segments and tune context thresholds, with a guided menu or direct arguments.
+description: Configure the claude-statusline status line. Toggle segments, switch the context display (percent/tokens), tune thresholds, and turn progress bars on or off — via a guided menu or direct arguments.
 argument-hint: "[setting] [value]   ·   e.g. branch disable · yellow 180k · (empty opens a menu)"
 allowed-tools: Bash(python3:*), Bash(python:*), Bash(py:*), AskUserQuestion
 ---
@@ -66,10 +66,16 @@ Arguments: `$ARGUMENTS`
 Read the arguments and act in **one** of these modes:
 
 ### 1. No arguments → guided menu
-Drive a multi-level menu with the **AskUserQuestion** tool, walking the dump JSON:
+Drive a multi-level menu with the **AskUserQuestion** tool, walking the dump JSON.
 
-1. **Pick a group.** One question whose options are the `groups[].label`
-   (e.g. "Context usage", "5-hour rate limit"). Add a "Show current config" option.
+**AskUserQuestion shows at most four options per question.** There are more groups
+than that, and some groups hold more than four settings, so don't try to cram them
+into one question: present them in small logical batches across successive
+questions. Faster still, if the user already hinted at what they want, skip the
+group step and jump straight to that setting.
+
+1. **Pick a group.** Ask with the `groups[].label` options (e.g. "Context usage",
+   "5-hour rate limit"), batching to four at a time. Add a "Show current config" option.
 2. **Pick a setting.** Options are that group's `options[].label`; in each
    option's description, show its `current_display` and `help`.
 3. **Pick or enter a value:**

@@ -26,8 +26,8 @@ The renderer is one Python file that behaves the same everywhere. Each platform 
 - **Workspace**: the last two path components, in bold.
 - **Branch and model**: your current git branch and the model you're on.
 - **Effort**: the active reasoning effort, like `max effort`. It disappears when the model has no effort level.
-- **Context**: a colour-coded bar with the used percentage and the window size (`200K` or `1M`).
-- **5h and 7d**: rate-limit usage, with how long until each window resets.
+- **Context**: a colour-coded bar with the used percentage and the window size (`200K` or `1M`). You can switch the percentage to a token count, or hide the bar.
+- **5h and 7d**: rate-limit usage, with how long until each window resets, and an optional usage bar.
 - **Burn-rate flag**: a 🔴/🟢 after each reset time. 🔴 means you'll hit the limit *before* the window resets; 🟢 means you're on pace or have room to spare.
 
 The colours read like a traffic light: green means you have room, yellow means it's filling up, red means you're close to the limit.
