@@ -1,7 +1,7 @@
 ---
 description: Configure the claude-statusline status line. Toggle segments, switch the context display (percent/tokens), tune thresholds, and turn the context progress bar on or off — via a guided menu or direct arguments.
 argument-hint: "[setting] [value]   ·   e.g. branch disable · yellow 180k · (empty opens a menu)"
-allowed-tools: Bash(python3:*), Bash(python:*), Bash(py:*), AskUserQuestion
+allowed-tools: Bash(python3 */statusline-config.py *), Bash(python */statusline-config.py *), Bash(py */statusline-config.py *), AskUserQuestion
 ---
 
 <!--
@@ -12,6 +12,18 @@ allowed-tools: Bash(python3:*), Bash(python:*), Bash(py:*), AskUserQuestion
   and update the single constant on the next line. Nothing else in the project
   (engine, schema, renderer, installer) hard-codes the name; they only deal in
   config paths, so a rename stays a one-file change.
+-->
+
+<!--
+  ALLOWED-TOOLS SCOPING (security)
+  -------------------------------
+  The Bash rules in the frontmatter are deliberately narrowed to
+  '<py> */statusline-config.py *' rather than the blanket 'Bash(python3:*)'.
+  A blanket interpreter rule auto-approves ANY python invocation while this
+  command runs (e.g. 'python3 -c "<arbitrary>"'), which a prompt-injection in
+  $ARGUMENTS or in the dump JSON could abuse. The '*/statusline-config.py'
+  segment keeps the path-separator boundary so only our engine script matches.
+  Do NOT widen these back to 'Bash(python3:*)'.
 -->
 
 COMMAND_NAME = `/statusline`

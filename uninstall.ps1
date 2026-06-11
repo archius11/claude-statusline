@@ -16,11 +16,15 @@ $uninstaller = Join-Path $here 'statusline\uninstall.py'
 $pyExe  = $null
 $pyArgs = @()
 foreach ($cand in @('py', 'python', 'python3')) {
-    if (Get-Command $cand -ErrorAction SilentlyContinue) {
-        $pyExe = $cand
-        if ($cand -eq 'py') { $pyArgs = @('-3') }
-        break
-    }
+    if (-not (Get-Command $cand -ErrorAction SilentlyContinue)) { continue }
+    $probe = @(); if ($cand -eq 'py') { $probe = @('-3') }
+    # Skip the Microsoft Store python.exe stub (on PATH by default): a real
+    # Python answers '--version' with exit 0, the stub exits non-zero.
+    try { & $cand @probe '--version' *> $null } catch { continue }
+    if ($LASTEXITCODE -ne 0) { continue }
+    $pyExe = $cand
+    $pyArgs = $probe
+    break
 }
 
 if (-not $pyExe) {

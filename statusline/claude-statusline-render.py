@@ -18,17 +18,26 @@ import datetime
 import glob
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 
-# Emit UTF-8 regardless of the platform's default code page, so the box-drawing
-# (█░⎇), Braille (⠀) and emoji (🔴🟢) glyphs survive on Windows consoles too.
+# Emit/consume UTF-8 regardless of the platform's default code page, so the
+# box-drawing (█░⎇), Braille (⠀) and emoji (🔴🟢) glyphs survive on Windows
+# consoles, and so non-ASCII workspace paths in the stdin payload (e.g. a
+# Cyrillic / CJK username or project name) decode correctly instead of turning
+# into mojibake or breaking the JSON parse.
 try:
     sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+try:
+    sys.stdin.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
@@ -50,10 +59,32 @@ def num(v):
     # Coerce a JSON value to a float, or None when it isn't numeric. Claude Code
     # sends percentages / timestamps / sizes as numbers, but if a future payload
     # variant sends one as a string we must degrade, never crash mid-render.
+    # NaN / Infinity are rejected too: json.loads accepts those literals, but
+    # they would later blow up int(round(...)) / int(size) with ValueError /
+    # OverflowError, so we treat them as "not a usable number".
     try:
-        return float(v)
+        f = float(v)
     except (TypeError, ValueError):
         return None
+    return f if math.isfinite(f) else None
+
+
+def clean(s):
+    # Strip control characters (including ESC, 0x1b) from untrusted strings
+    # before we wrap them in our own ANSI colour codes. A workspace path or git
+    # branch name can legally contain raw escape bytes on Unix; left unfiltered
+    # they would inject terminal escape sequences (cursor moves, title/clipboard
+    # OSC, colour resets) straight into the status line. Tabs are dropped too so
+    # they can't throw off the column arithmetic below.
+    return "".join(ch for ch in s if ord(ch) >= 0x20 and ord(ch) != 0x7f)
+
+
+def vlen(s):
+    # Visual column width of a string: East-Asian Wide / Fullwidth code points
+    # (CJK, fullwidth forms) occupy two terminal columns, everything else one.
+    # Used so a wide character in a path / branch name doesn't over-pad and
+    # shift the buddy art (the 🔴/🟢 emoji are width-counted separately inline).
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in s)
 
 
 def cpct(p):
@@ -138,23 +169,30 @@ def git_info(cwd):
     # Fresh cache wins outright.
     try:
         if time.time() - os.path.getmtime(cache_path) < GIT_CACHE_TTL:
-            with open(cache_path) as f:
+            with open(cache_path, encoding="utf-8") as f:
                 c = json.load(f)
             return c.get("branch", ""), bool(c.get("dirty", False))
     except Exception:
         pass  # missing / stale / unreadable -> fall through to a live read
 
+    # A hard timeout on every git call: on a huge or network-mounted (WSL /mnt,
+    # SMB) repo a single status can stall for seconds, and the renderer reruns
+    # every ~1s, so an unbounded call would pile up blocked processes. On timeout
+    # we degrade to empty/clean rather than freeze the status line.
+    GIT_TIMEOUT = 3
     branch, dirty = "", False
     try:
         branch = subprocess.check_output(
             ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
-            stderr=subprocess.DEVNULL, text=True, creationflags=_NO_WINDOW).strip()
+            stderr=subprocess.DEVNULL, text=True, creationflags=_NO_WINDOW,
+            timeout=GIT_TIMEOUT).strip()
         if branch == "HEAD":
             # Detached HEAD (rebase / bisect / a checked-out tag or commit):
             # show the short commit instead of the literal word 'HEAD'.
             short = subprocess.check_output(
                 ["git", "-C", cwd, "rev-parse", "--short", "HEAD"],
-                stderr=subprocess.DEVNULL, text=True, creationflags=_NO_WINDOW).strip()
+                stderr=subprocess.DEVNULL, text=True, creationflags=_NO_WINDOW,
+                timeout=GIT_TIMEOUT).strip()
             if short:
                 branch = "@" + short
     except Exception:
@@ -166,10 +204,12 @@ def git_info(cwd):
         try:
             unstaged = subprocess.call(
                 ["git", "-C", cwd, "diff", "--quiet"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW, timeout=GIT_TIMEOUT)
             staged = subprocess.call(
                 ["git", "-C", cwd, "diff", "--cached", "--quiet"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW, timeout=GIT_TIMEOUT)
             dirty = unstaged != 0 or staged != 0
         except Exception:
             dirty = False
@@ -177,9 +217,26 @@ def git_info(cwd):
     # Persist the result (atomically; a non-writable temp dir just means no cache).
     try:
         tmp = cache_path + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"branch": branch, "dirty": dirty}, f)
         os.replace(tmp, cache_path)
+    except Exception:
+        pass
+
+    # Best-effort sweep of stale cache files. One file is created per distinct
+    # working directory and the TTL only governs freshness, not lifetime, so
+    # nothing else ever deletes them; on a %TEMP% that isn't cleared on reboot
+    # (Windows) heavy multi-project use would otherwise accumulate them forever.
+    # We only ever touch our own prefix, and only on a cache miss.
+    try:
+        cutoff = time.time() - 86400  # a day of staleness is plenty to keep
+        pattern = os.path.join(tempfile.gettempdir(), "claude-statusline-*.json")
+        for stale in glob.glob(pattern):
+            try:
+                if os.path.getmtime(stale) < cutoff:
+                    os.remove(stale)
+            except OSError:
+                pass
     except Exception:
         pass
     return branch, dirty
@@ -250,20 +307,10 @@ def buddy_script_from_registration():
     return ""
 
 
-def find_buddy_script():
-    # Locate claude-buddy's status script (optional). buddy is Linux/macOS only,
-    # so on Windows the renderer cleanly falls back to the single line.
-    #
-    # 1) Explicit override: power users and tests pin an exact path.
-    override = os.environ.get("BUDDY_STATUS_SCRIPT")
-    if override and os.path.isfile(override) and os.access(override, os.X_OK):
-        return override
-
-    # buddy doesn't support Windows. Skip auto-discovery there: nothing to find,
-    # and this avoids reading Claude's user config on every one-second refresh.
-    if os.name == "nt":
-        return ""
-
+def _discover_buddy_script():
+    # Everything past the explicit override: fixed locations, plugin globs, the
+    # MCP-registration read, and a PATH probe. Factored out so find_buddy_script
+    # can cache the result — steps 4/5 here are the expensive ones.
     home = os.path.expanduser("~")
     # Honour multi-profile installs: buddy resolves paths against CLAUDE_CONFIG_DIR.
     cfg = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
@@ -301,6 +348,56 @@ def find_buddy_script():
     return ""
 
 
+def find_buddy_script():
+    # Locate claude-buddy's status script (optional). buddy is Linux/macOS only,
+    # so on Windows the renderer cleanly falls back to the single line.
+    #
+    # 1) Explicit override: power users and tests pin an exact path. Cheap and
+    #    authoritative, so it's checked first and never cached.
+    override = os.environ.get("BUDDY_STATUS_SCRIPT")
+    if override and os.path.isfile(override) and os.access(override, os.X_OK):
+        return override
+
+    # buddy doesn't support Windows. Skip auto-discovery there: nothing to find,
+    # and this avoids reading Claude's user config on every one-second refresh.
+    if os.name == "nt":
+        return ""
+
+    # Cache the discovery result briefly. _discover_buddy_script parses Claude's
+    # ~/.claude.json (which grows large for heavy users) and probes PATH, and the
+    # renderer reruns every ~1s — without this a buddy-less user would re-parse
+    # that file every second. Buddy presence rarely changes mid-session, so a
+    # short TTL is invisible in practice; a cached path is re-validated on read
+    # so a removed buddy isn't served stale.
+    BUDDY_CACHE_TTL = 30
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(
+        os.path.expanduser("~"), ".claude")
+    key = hashlib.sha256(cfg.encode("utf-8", "replace")).hexdigest()[:16]
+    cache_path = os.path.join(tempfile.gettempdir(), f"claude-statusline-buddy.{key}.json")
+
+    try:
+        if time.time() - os.path.getmtime(cache_path) < BUDDY_CACHE_TTL:
+            with open(cache_path, encoding="utf-8") as f:
+                cached = json.load(f).get("script", "")
+            if not cached:
+                return ""  # cached "no buddy here" — the whole point of the cache
+            if os.path.isfile(cached) and os.access(cached, os.X_OK):
+                return cached
+            # Cached path vanished: fall through and rediscover.
+    except Exception:
+        pass
+
+    script = _discover_buddy_script()
+    try:
+        tmp = cache_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"script": script}, f)
+        os.replace(tmp, cache_path)
+    except Exception:
+        pass
+    return script
+
+
 def run_buddy():
     # Run the buddy status script (if any) and capture its art. buddy reads its
     # own state files; it does not consume our stdin, so we hand it /dev/null.
@@ -309,9 +406,15 @@ def run_buddy():
     if not script:
         return ""
     try:
+        # Hard timeout: the renderer reruns every ~1s, so a buddy script that
+        # blocks (lock, network, a hung bun/node child, a stray sleep) must not
+        # wedge us forever and let stuck processes pile up — on timeout we just
+        # drop the art and render the clean single line. TimeoutExpired is a
+        # subprocess error, so the except below also kills the child for us.
         return subprocess.run(
             [script], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, creationflags=_NO_WINDOW).stdout
+            stderr=subprocess.DEVNULL, text=True, creationflags=_NO_WINDOW,
+            timeout=2).stdout
     except Exception:
         return ""
 
@@ -344,7 +447,7 @@ def schema_defaults(schema_path):
     # Build the default config from the schema's 'default' values. Falls back to
     # the safety net if the schema can't be read or is empty.
     try:
-        with open(schema_path) as f:
+        with open(schema_path, encoding="utf-8") as f:
             schema = json.load(f)
         defaults = {}
         for group_key, group in schema.get("groups", {}).items():
@@ -366,7 +469,7 @@ def load_config(path, defaults):
     cfg = json.loads(json.dumps(defaults))
     if path and os.path.exists(path):
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 user = json.load(f)
             for section in cfg:
                 if isinstance(user.get(section), dict):
@@ -378,7 +481,11 @@ def load_config(path, defaults):
             parent = os.path.dirname(path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-            with open(path, "w") as f:
+            # Exclusive create, never "w": the renderer runs every ~1s, so an
+            # exists()-then-open('w') would race the config engine's atomic
+            # replace and truncate a config the user just saved. open(..,'x')
+            # fails harmlessly (caught below) if the file appeared meanwhile.
+            with open(path, "x", encoding="utf-8") as f:
                 json.dump({}, f, indent=2)
                 f.write("\n")
         except Exception:
@@ -422,6 +529,11 @@ def main():
         data = json.loads(os.environ.get("INPUT_JSON") or raw_stdin)
     except Exception:
         data = {}
+    # 'null', '"x"', '[1,2]' are all valid JSON but not the object we expect;
+    # without this guard the first data.get(...) below raises AttributeError and
+    # the whole render crashes. Degrade to empty instead.
+    if not isinstance(data, dict):
+        data = {}
 
     defaults = schema_defaults(resolve_schema_path())
     cfg = load_config(resolve_config_path(), defaults)
@@ -439,9 +551,12 @@ def main():
     # split below behave the same on every platform.
     home = os.path.expanduser("~").replace("\\", "/")
     cwd = ((data.get("workspace") or {}).get("current_dir") or data.get("cwd", "") or "").replace("\\", "/")
-    if home and cwd.startswith(home):
-        cwd_short = cwd.replace(home, "~", 1)
-    elif home and os.name == "nt" and cwd.lower().startswith(home.lower()):
+    # Replace home with '~' only on a path-component boundary, so a sibling like
+    # /home/archiebald isn't mangled to '~bald' when home is /home/archie.
+    if home and (cwd == home or cwd.startswith(home + "/")):
+        cwd_short = "~" + cwd[len(home):]
+    elif home and os.name == "nt" and (
+            cwd.lower() == home.lower() or cwd.lower().startswith(home.lower() + "/")):
         # Windows paths are case-insensitive; match the home prefix regardless.
         cwd_short = "~" + cwd[len(home):]
     else:
@@ -478,8 +593,11 @@ def main():
 
     # Branch + dirty state (cached; see git_info). Skip the git work entirely when
     # neither the branch nor the dirty marker is shown.
+    # The dirty '*' only ever renders inside the branch block, so the git work is
+    # useful only when the branch segment itself is on. Gating on 'dirty' too
+    # would keep forking git on a status line that shows none of the result.
     branch, dirty = "", False
-    if cwd and (br_cfg.get("enable", True) or br_cfg.get("dirty", True)):
+    if cwd and br_cfg.get("enable", True):
         branch, dirty = git_info(cwd)
 
     # Each info segment is (ansi_text, visual_width). visual_width excludes the
@@ -489,8 +607,8 @@ def main():
     if ws_cfg.get("enable", True) and cwd_short:
         # Keep only the last two path components to stay compact.
         parts = cwd_short.split("/")
-        short = "/".join(parts[-2:]) if len(parts) > 2 else cwd_short
-        info.append((f"{BOLD}{short}{RST}", len(short)))
+        short = clean("/".join(parts[-2:]) if len(parts) > 2 else cwd_short)
+        info.append((f"{BOLD}{short}{RST}", vlen(short)))
 
     # Repo line: branch glyph + name (+ dirty '*') + session line diff, grouped so
     # they read as one unit, e.g. '⎇ main* +12/-3'. The diff comes from the session
@@ -498,11 +616,12 @@ def main():
     repo_bits = []
     repo_w = 0
     if br_cfg.get("enable", True) and branch:
+        branch = clean(branch)
         mark, mark_w = "", 0
         if br_cfg.get("dirty", True) and dirty:
             mark, mark_w = f"{YLW}*{RST}", 1
         repo_bits.append(f"{DIM}⎇{RST} {BOLD}{branch}{RST}{mark}")
-        repo_w += 2 + len(branch) + mark_w  # '⎇ ' occupies two columns
+        repo_w += 2 + vlen(branch) + mark_w  # '⎇ ' occupies two columns
     if diff_cfg.get("enable", True) and (lines_added or lines_removed):
         repo_bits.append(f"{GRN}+{lines_added}{RST}/{RED}-{lines_removed}{RST}")
         repo_w += 3 + len(str(lines_added)) + len(str(lines_removed))  # '+N/-M'
@@ -648,4 +767,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Last-resort guard. The renderer is on Claude Code's once-a-second hot
+        # path; an uncaught exception would print a traceback straight into the
+        # status line. The module's contract is "degrade, never crash", so on any
+        # unforeseen error we exit cleanly with no output rather than a stack dump.
+        pass

@@ -15,6 +15,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _settings_patch as patch  # noqa: E402
 
+# Glyphs (✓ → ⚠) need UTF-8; a redirected/piped stdout on Windows otherwise
+# uses the ANSI code page and the first print crashes with UnicodeEncodeError.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 
 if sys.stdout.isatty():
     GREEN, CYAN, YELLOW, NC = "\033[32m", "\033[36m", "\033[33m", "\033[0m"

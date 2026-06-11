@@ -25,6 +25,7 @@ import json
 import math
 import os
 import sys
+import time
 
 
 # Path resolution
@@ -62,13 +63,18 @@ def resolve_schema_path():
 
 def load_schema():
     path = resolve_schema_path()
+    # Always UTF-8: the schema embeds box-drawing (████░░░░░░) and emoji (🔴🟢)
+    # in its help text, which the platform ANSI code page on Windows can't
+    # decode — without this every subcommand would die with UnicodeDecodeError.
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError:
         fail(f"Schema file not found: {path}")
     except json.JSONDecodeError as e:
         fail(f"Schema file is not valid JSON ({path}): {e}")
+    except (UnicodeDecodeError, OSError) as e:
+        fail(f"Schema file could not be read ({path}): {e}")
 
 
 def leaf_nodes(schema):
@@ -113,14 +119,42 @@ def node_for_path(schema, path):
 # Config loading / merging
 
 def read_config_file(path):
-    # Returns (data, status). status is 'ok', 'missing' or 'malformed'.
+    # Returns (data, status). status is one of:
+    #   ok          valid JSON object
+    #   missing     no file yet -> defaults are in effect
+    #   malformed   invalid JSON, bad bytes, or valid JSON that isn't an object
+    #   unreadable  a transient OS error (permission, lock) — the file itself may
+    #               be perfectly fine, so callers must NOT quarantine/rebuild it
+    # The malformed vs unreadable split matters: the old code mapped EVERY error
+    # to 'malformed', so a momentary permission/lock error would move a valid
+    # config aside and silently reset all the user's settings.
     if not path or not os.path.exists(path):
         return {}, "missing"
     try:
-        with open(path) as f:
-            return json.load(f), "ok"
-    except Exception:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return {}, "malformed"
+    except OSError:
+        return {}, "unreadable"
+    if not isinstance(data, dict):
+        # Valid JSON but a list/str/number: effective_config()/cmd_validate would
+        # raise AttributeError on .get/.items. Treat it as malformed instead.
+        return {}, "malformed"
+    return data, "ok"
+
+
+def quarantine_corrupt(config_path):
+    # Move a corrupt config aside before rebuilding, WITHOUT clobbering an
+    # earlier rescue: a single fixed .corrupt.bak would overwrite the first
+    # (recoverable) copy on the second corruption. Returns the path used.
+    target = config_path + ".corrupt.bak"
+    n = 1
+    while os.path.exists(target):
+        target = f"{config_path}.corrupt.bak.{n}"
+        n += 1
+    os.replace(config_path, target)
+    return target
 
 
 def effective_config(schema, user_data):
@@ -267,18 +301,29 @@ def write_config(path, schema, nested):
         os.makedirs(parent, exist_ok=True)
     if os.path.exists(path):
         try:
-            with open(path) as src:
+            with open(path, encoding="utf-8") as src:
                 previous = src.read()
-            with open(path + ".bak", "w") as dst:
+            with open(path + ".bak", "w", encoding="utf-8") as dst:
                 dst.write(previous)
         except Exception:
             pass  # A failed backup must not block the actual write.
 
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(overrides_only(schema, nested), f, indent=2)
         f.write("\n")
-    os.replace(tmp, path)
+    # On Windows, os.replace (MoveFileEx) raises PermissionError if the renderer
+    # has the target open for its once-a-second read at that instant. The window
+    # is tiny, so a few short retries clear it rather than failing the user's
+    # change and leaving the .tmp behind. Elsewhere os.replace never collides.
+    for attempt in range(10):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 9:
+                raise
+            time.sleep(0.02)
 
 
 # Output helpers
@@ -372,13 +417,18 @@ def cmd_set(schema, args):
 
     config_path = resolve_config_path()
     user_data, status = read_config_file(config_path)
+    if status == "unreadable":
+        # A valid file we just couldn't read (permission / lock): never quarantine
+        # or reset it — bail and let the user retry, leaving the file intact.
+        fail(f"cannot read {config_path} right now (permission or lock); left it "
+             f"untouched. Try again in a moment.")
     if status == "malformed":
         # Don't silently discard a hand-edited file: preserve it, then rebuild.
         try:
-            os.replace(config_path, config_path + ".corrupt.bak")
+            saved = quarantine_corrupt(config_path)
             sys.stderr.write(
                 f"warning: existing config was not valid JSON; backed up to "
-                f"{config_path}.corrupt.bak and rebuilt from defaults.\n")
+                f"{saved} and rebuilt from defaults.\n")
         except Exception:
             pass
         user_data = {}
@@ -410,13 +460,19 @@ def cmd_validate(schema):
     if status == "missing":
         print(f"No config file yet at {config_path}; defaults are in effect.")
         return
+    if status == "unreadable":
+        fail(f"Cannot read config file right now (permission or lock): {config_path}")
     if status == "malformed":
         fail(f"Config file is not valid JSON: {config_path}")
 
-    issues = []
+    issues = []    # real problems: a config carrying these is invalid (exit 1)
+    notices = []   # harmless: keys the renderer ignores and set/reset will prune
     valid_paths = {p for p, _g, _n in leaf_nodes(schema)}
 
-    # Unknown keys (typos, settings removed from the schema).
+    # Unknown keys. A setting removed in an upgrade (e.g. five_hour.progress_bar)
+    # is the engine's OWN earlier output: the renderer ignores it and the next
+    # set/reset drops it, so it must NOT make 'validate' fail forever. Report it
+    # as a non-fatal notice. A non-object section is a real structural problem.
     for section, values in user_data.items():
         if not isinstance(values, dict):
             issues.append(f"section '{section}' should be an object")
@@ -424,7 +480,9 @@ def cmd_validate(schema):
         for key in values:
             path = f"{section}.{key}"
             if path not in valid_paths:
-                issues.append(f"unknown setting '{path}'")
+                notices.append(
+                    f"'{path}' is not a current setting; it is ignored and will "
+                    f"be removed on the next change")
 
     # Type / range checks on known keys.
     for path, _group, node in leaf_nodes(schema):
@@ -446,25 +504,33 @@ def cmd_validate(schema):
     cfg = effective_config(schema, user_data)
     issues.extend(constraint_errors(schema, cfg))
 
+    if notices:
+        print(f"{len(notices)} note(s) for {config_path}:")
+        for note in notices:
+            print(f"  - {note}")
     if issues:
         print(f"Found {len(issues)} issue(s) in {config_path}:")
         for issue in issues:
             print(f"  - {issue}")
         sys.exit(1)
-    print(f"OK: {config_path} is valid against the schema.")
+    suffix = " (see notes above)" if notices else ""
+    print(f"OK: {config_path} is valid against the schema.{suffix}")
 
 
 def cmd_reset(schema, args):
     config_path = resolve_config_path()
     user_data, status = read_config_file(config_path)
+    if status == "unreadable":
+        fail(f"cannot read {config_path} right now (permission or lock); left it "
+             f"untouched. Try again in a moment.")
     if status == "malformed":
         # Mirror cmd_set: don't silently discard a hand-edited file; preserve it
-        # to .corrupt.bak and warn, then rebuild from defaults.
+        # to a fresh .corrupt.bak and warn, then rebuild from defaults.
         try:
-            os.replace(config_path, config_path + ".corrupt.bak")
+            saved = quarantine_corrupt(config_path)
             sys.stderr.write(
                 f"warning: existing config was not valid JSON; backed up to "
-                f"{config_path}.corrupt.bak and rebuilt from defaults.\n")
+                f"{saved} and rebuilt from defaults.\n")
         except Exception:
             pass
         user_data = {}

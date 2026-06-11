@@ -20,6 +20,7 @@ SL = os.path.join(REPO, "statusline")
 RENDER = os.path.join(SL, "claude-statusline-render.py")
 INSTALL = os.path.join(SL, "install.py")
 UNINSTALL = os.path.join(SL, "uninstall.py")
+CONFIG_ENGINE = os.path.join(SL, "statusline-config.py")
 SCHEMA = os.path.join(SL, "claude-statusline.schema.json")
 PY = sys.executable
 
@@ -40,7 +41,10 @@ def run(cmd, payload=None, env_extra=None):
     env = dict(os.environ)
     if env_extra:
         env.update(env_extra)
-    return subprocess.run(cmd, input=payload, text=True,
+    # Force UTF-8 for the child's stdin/stdout: the renderer emits box-drawing /
+    # emoji glyphs, and without this the test would decode them with the locale
+    # code page on Windows and the bar / progress-bar assertions would misfire.
+    return subprocess.run(cmd, input=payload, text=True, encoding="utf-8",
                           capture_output=True, env=env)
 
 
@@ -71,6 +75,15 @@ def test_render_crash_proof():
         "not json at all",
         '{"context_window":{"used_percentage":"50","context_window_size":200000}}',
         '{"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":"9999999999"}}}',
+        # Valid JSON that isn't an object: must degrade, not AttributeError.
+        "null",
+        "[1, 2, 3]",
+        '"just a string"',
+        # NaN / Infinity: json.loads accepts these literals, but they used to
+        # blow up int(round(...)) / int(size); num() must now reject them.
+        '{"context_window":{"used_percentage":NaN,"context_window_size":200000}}',
+        '{"context_window":{"used_percentage":12,"context_window_size":Infinity}}',
+        '{"rate_limits":{"five_hour":{"used_percentage":Infinity,"resets_at":9999999999}}}',
     ]
     with tempfile.TemporaryDirectory() as sb:
         for payload in odd:
@@ -113,6 +126,85 @@ def test_render_new_options():
             json.dump({"context": {"progress_bar": False}}, f)
         off = run([PY, RENDER], payload, env)
         check(_count_bars(off.stdout) == 0, "context progress_bar=false removes the bar")
+
+
+def test_render_home_boundary():
+    # Home is replaced with '~' only on a path-component boundary: a sibling
+    # directory that merely shares the home prefix must not be mangled.
+    with tempfile.TemporaryDirectory() as sb:
+        home = os.path.join(sb, "h")
+        env = no_buddy(sb)
+        env["HOME"] = home
+        env["USERPROFILE"] = home
+
+        sibling = run([PY, RENDER],
+                      json.dumps({"workspace": {"current_dir": home + "bald/project"}}), env)
+        check(sibling.returncode == 0, "sibling-of-home render exits 0")
+        check("~bald" not in sibling.stdout, "sibling dir not mangled to '~bald'")
+        check("hbald/project" in sibling.stdout, "sibling path shown intact")
+
+        inside = run([PY, RENDER],
+                     json.dumps({"workspace": {"current_dir": home + "/project"}}), env)
+        check("~/project" in inside.stdout, "a real child of home is shortened to '~'")
+
+
+def test_config_validate_tolerates_removed_keys():
+    # A config written by a PREVIOUS version may carry a setting since removed
+    # from the schema (e.g. five_hour.progress_bar). validate must report it as a
+    # non-fatal note and still exit 0 — and the next write must prune it.
+    with tempfile.TemporaryDirectory() as sb:
+        cfgp = os.path.join(sb, "cfg.json")
+        with open(cfgp, "w", encoding="utf-8") as f:
+            json.dump({"five_hour": {"progress_bar": True}, "context": {"yellow": 180000}}, f)
+        env = {"STATUSLINE_CONFIG": cfgp, "STATUSLINE_SCHEMA": SCHEMA,
+               "CLAUDE_CONFIG_DIR": sb, "HOME": sb, "USERPROFILE": sb}
+
+        v = run([PY, CONFIG_ENGINE, "validate"], None, env)
+        check(v.returncode == 0, "validate exits 0 despite a removed setting key")
+        check("Traceback" not in v.stderr, "validate never dumps a traceback")
+        check("not a current setting" in v.stdout, "validate notes the stale key")
+
+        s = run([PY, CONFIG_ENGINE, "set", "yellow", "190k"], None, env)
+        check(s.returncode == 0, "set applies with a stale key present")
+        with open(cfgp, encoding="utf-8") as f:
+            saved = json.load(f)
+        check("progress_bar" not in saved.get("five_hour", {}),
+              "stale five_hour.progress_bar pruned on next write")
+
+        # A valid-JSON-but-not-an-object config fails cleanly, no traceback.
+        with open(cfgp, "w", encoding="utf-8") as f:
+            f.write("[1, 2, 3]")
+        nv = run([PY, CONFIG_ENGINE, "validate"], None, env)
+        check(nv.returncode != 0, "non-object config is rejected")
+        check("Traceback" not in nv.stderr, "non-object config: friendly error, no traceback")
+
+
+def test_uninstall_restores_latest_backup():
+    # install (A -> primary backup) -> user switches to another tool B -> install
+    # again (B -> a numbered secondary) -> uninstall must restore B, the MOST
+    # recently displaced statusLine, not the stale A, and clean up all backups.
+    sys.path.insert(0, SL)
+    import _settings_patch as patch
+    with tempfile.TemporaryDirectory() as sb:
+        settings = os.path.join(sb, "settings.json")
+        backup = os.path.join(sb, "sl.bak")
+        A = {"type": "command", "command": "/tools/A.sh"}
+        B = {"type": "command", "command": "/tools/B.sh"}
+        ours = "/cfg/claude-statusline.sh"
+
+        with open(settings, "w", encoding="utf-8") as f:
+            json.dump({"statusLine": A}, f)
+        patch.install(settings, ours, backup)        # A -> primary backup
+        with open(settings, "w", encoding="utf-8") as f:
+            json.dump({"statusLine": B}, f)           # user switches to tool B
+        patch.install(settings, ours, backup)        # B -> a secondary backup
+        patch.uninstall(settings, backup)
+
+        with open(settings, encoding="utf-8") as f:
+            restored = json.load(f)["statusLine"]
+        check(restored == B, "uninstall restores the most recently displaced statusLine")
+        leftover = [p for p in (backup, backup + ".1", backup + ".2") if os.path.exists(p)]
+        check(not leftover, "all statusLine backups cleaned up on uninstall")
 
 
 def test_install_uninstall_roundtrip():
@@ -223,6 +315,9 @@ def main():
     test_render_single_line()
     test_render_crash_proof()
     test_render_new_options()
+    test_render_home_boundary()
+    test_config_validate_tolerates_removed_keys()
+    test_uninstall_restores_latest_backup()
     test_install_uninstall_roundtrip()
     test_interop_buddy_statusline()
     test_buddy_discovery_via_registration()

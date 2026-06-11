@@ -25,15 +25,21 @@ def is_ours(status_line):
 
 
 def _read_settings(path):
-    # Returns the parsed settings dict. Missing file -> {}. Invalid JSON raises
-    # ValueError so the caller can abort loudly instead of clobbering the file.
+    # Returns the parsed settings dict. Missing file -> {}. Invalid JSON (or
+    # valid JSON that isn't an object) raises ValueError so the caller aborts
+    # loudly instead of clobbering the file or crashing on .get/[]. Always UTF-8:
+    # Claude Code writes settings.json as UTF-8 (hook/command paths may hold a
+    # non-ASCII username), and the platform ANSI code page would mojibake them.
     if not os.path.exists(path):
         return {}
     try:
-        with open(path) as f:
-            return json.load(f)
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
     except json.JSONDecodeError as e:
         raise ValueError(f"settings.json is not valid JSON ({e}). Aborting.")
+    if not isinstance(data, dict):
+        raise ValueError("settings.json is not a JSON object. Aborting.")
+    return data
 
 
 def _atomic_write_json(path, data):
@@ -41,7 +47,7 @@ def _atomic_write_json(path, data):
     if parent:
         os.makedirs(parent, exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
         f.flush()
@@ -50,9 +56,30 @@ def _atomic_write_json(path, data):
 
 
 def _write_backup(old, backup_path):
-    with open(backup_path, "w") as f:
+    # Atomic + fsync, like the settings write: a crash mid-backup must never
+    # leave a truncated backup that then blocks (or silently corrupts) restore.
+    tmp = backup_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(old, f, indent=2)
         f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, backup_path)
+
+
+def _backup_slots(backup_path):
+    # Every existing backup, oldest first: the primary .bak (written by the first
+    # install) then any numbered secondaries .bak.1, .bak.2, ... (each a real
+    # third-party statusLine displaced by a later re-install). The last entry is
+    # thus the most recently displaced statusLine — the one uninstall restores.
+    slots = []
+    if os.path.exists(backup_path):
+        slots.append(backup_path)
+    n = 1
+    while os.path.exists(f"{backup_path}.{n}"):
+        slots.append(f"{backup_path}.{n}")
+        n += 1
+    return slots
 
 
 def install(settings_path, command, backup_path):
@@ -70,7 +97,7 @@ def install(settings_path, command, backup_path):
             backed_up = backup_path
         else:
             try:
-                with open(backup_path) as f:
+                with open(backup_path, encoding="utf-8") as f:
                     stored = json.load(f)
             except Exception:
                 stored = None
@@ -106,20 +133,35 @@ def uninstall(settings_path, backup_path):
         # Someone else (e.g. claude-buddy) owns the status line now: leave it.
         return "not-ours"
 
-    if os.path.exists(backup_path):
-        with open(backup_path) as f:
+    slots = _backup_slots(backup_path)
+    if slots:
+        # Restore the MOST RECENTLY displaced statusLine (highest-numbered slot),
+        # not the oldest primary .bak — otherwise an install → switch tools →
+        # re-install → uninstall sequence would restore an ancient config and
+        # orphan the user's real one in a .bak.N nobody ever reads.
+        latest = slots[-1]
+        with open(latest, encoding="utf-8") as f:
             restored = json.load(f)
-        os.remove(backup_path)
         settings["statusLine"] = restored
         cmd = restored.get("command", "") if isinstance(restored, dict) else ""
-        # Flag when the restored command points at a script that no longer exists
-        # so the user isn't silently left on a dead command. Best-effort: a
-        # multi-word command (e.g. a Windows powershell invocation) won't resolve
-        # as a bare path, so this only ever downgrades to a harmless warning.
-        marker = "restored" if (cmd and os.path.exists(cmd)) else "restored-missing"
-    else:
-        settings.pop("statusLine", None)
-        marker = "removed"
+        cmd = cmd.strip() if isinstance(cmd, str) else ""
+        # Only warn "no longer resolves" when the command is a single bare token
+        # that doesn't exist as a path. A multi-word command (a Windows
+        # 'powershell ... -File ...', an 'npx ccusage statusline') can't be path-
+        # checked, so we assume it restored fine instead of warning spuriously.
+        single_token = bool(cmd) and " " not in cmd
+        marker = "restored-missing" if (single_token and not os.path.exists(cmd)) else "restored"
+        # Write settings FIRST, then drop the backups. If the write fails the
+        # user's original statusLine is still on disk and recoverable — deleting
+        # the only copy beforehand could lose it permanently on a failed write.
+        _atomic_write_json(settings_path, settings)
+        for slot in slots:
+            try:
+                os.remove(slot)
+            except OSError:
+                pass
+        return marker
 
+    settings.pop("statusLine", None)
     _atomic_write_json(settings_path, settings)
-    return marker
+    return "removed"

@@ -11,6 +11,11 @@
 $ErrorActionPreference = 'Continue'
 try {
     [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+    # InputEncoding too: Claude Code sends the JSON payload as UTF-8, and without
+    # this Windows PowerShell 5.1 decodes redirected stdin with the OEM code page
+    # (cp437/cp866), mangling non-ASCII workspace paths before Python ever sees
+    # them (and breaking the JSON parse on multibyte code pages).
+    [Console]::InputEncoding  = New-Object System.Text.UTF8Encoding $false
     $OutputEncoding           = [Console]::OutputEncoding
 } catch {}
 
@@ -34,10 +39,14 @@ foreach ($cand in @('py', 'python', 'python3')) {
 
 if ($pyExe) {
     $payload | & $pyExe @pyArgs $render
-    exit $LASTEXITCODE
+    if ($LASTEXITCODE -eq 0) { exit 0 }
+    # Non-zero exit means no usable Python ran: most often the Microsoft Store
+    # python.exe stub that ships on PATH by default (it prints an "install from
+    # the Store" notice to stderr, emits nothing on stdout, and exits 9009). Fall
+    # through to the dependency-free line so the bar is never silently blank.
 }
 
-# No Python: dependency-free fallback — just the current directory.
+# No (usable) Python: dependency-free fallback — just the current directory.
 $cwd = (Get-Location).Path
 $up  = $env:USERPROFILE
 if ($up -and $cwd.StartsWith($up, [System.StringComparison]::OrdinalIgnoreCase)) {

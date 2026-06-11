@@ -21,6 +21,16 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _settings_patch as patch  # noqa: E402
 
+# The status glyphs below (✓ → ⚠ ━) need UTF-8. On Windows an interactive
+# console is UTF-8 (PEP 528), but as soon as output is redirected or piped
+# (install.ps1 > log, CI) stdout falls back to the ANSI code page and the very
+# first print crashes with UnicodeEncodeError. ANSI colour is gated on isatty
+# below; the glyphs need this guard.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 
 # Pretty output (ANSI only on a real terminal, so captured output stays clean).
 if sys.stdout.isatty():
@@ -124,7 +134,7 @@ def main():
         ok(f"Settings file already exists → {config_dest} {DIM}(left untouched){NC}")
     else:
         try:
-            with open(config_dest, "w") as f:
+            with open(config_dest, "w", encoding="utf-8") as f:
                 f.write("{}\n")
             ok(f"Settings file created → {config_dest} {DIM}(all defaults active){NC}")
         except OSError:
