@@ -34,7 +34,7 @@ The colours read like a traffic light: green means you have room, yellow means i
 
 ## Requirements
 
-- python3. The only dependency. No node, no bun, no jq.
+- python3.
 - git, optional, used only to read the current branch.
 - claude-buddy, optional, Linux and macOS only. The status line detects it at runtime when it's present.
 
